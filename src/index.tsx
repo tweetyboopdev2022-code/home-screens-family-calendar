@@ -60,12 +60,15 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
   const people = meta?.people ?? [];
   const personOf = (sid?: string) => people.find((p) => (p.sourceIds ?? []).includes(sid ?? ''));
   const colorOf = (e: Ev) => personOf(e.sourceId)?.color || e.calendarColor || accent;
-  const allowed = (e: Ev) => {
-    if (!want.length) return true;
+  const matches = (e: Ev, w: string) => {
     const p = personOf(e.sourceId)?.name?.toLowerCase();
     const sid = String(e.sourceId ?? '').toLowerCase();
-    return want.some((w) => w === sid || w === p || (w === 'family' && sid.startsWith('family')) || (w === 'holidays' && sid === 'holidays'));
+    return w === sid || w === p || (w === 'family' && sid.startsWith('family')) || (w === 'holidays' && sid === 'holidays');
   };
+  // Tap a name in the legend to see only that calendar; resets by itself after a few minutes.
+  const [only, setOnly] = React.useState<string | null>(null);
+  React.useEffect(() => { if (!only) return; const t = setTimeout(() => setOnly(null), 180000); return () => clearTimeout(t); }, [only]);
+  const allowed = (e: Ev) => (!want.length || want.some((w) => matches(e, w))) && (!only || matches(e, only));
 
   // Bucket by day
   const byDay = new Map<string, Ev[]>(); const badge = new Map<string, number>(); const off = new Set<string>();
@@ -81,11 +84,23 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
   }
   for (const [, l] of byDay) l.sort((a, b) => (a.allDay === b.allDay ? +new Date(a.start) - +new Date(b.start) : a.allDay ? -1 : 1));
 
-  const legend = config.showLegend !== false && people.length > 0 && (
-    <div style={{ display: 'flex', gap: '0.9em', flexWrap: 'wrap', fontSize: '0.62em', opacity: 0.7, marginBottom: '0.5em' }}>
-      {people.filter((p) => !want.length || want.includes(p.name.toLowerCase())).map((p) => (
-        <span key={p.name} style={{ display: 'flex', alignItems: 'center', gap: '0.35em' }}><span style={{ width: '0.6em', height: '0.6em', borderRadius: '50%', background: p.color }} />{p.name}</span>
-      ))}
+  const chips = [
+    ...people.filter((p) => !want.length || want.includes(p.name.toLowerCase())).map((p) => ({ key: p.name.toLowerCase(), label: p.name, color: p.color || accent })),
+    ...(!want.length || want.includes('family') ? [{ key: 'family', label: 'Family', color: (events ?? []).find((e) => String(e.sourceId).startsWith('family'))?.calendarColor || '#9ca3af' }] : []),
+  ];
+  const chip = (key: string | null, label: string, color?: string) => {
+    const on = key === null ? only === null : only === key;
+    return (
+      <button key={label} onClick={() => setOnly(key === null || on ? null : key)} style={{ appearance: 'none', font: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4em',
+        padding: '0.3em 0.8em', borderRadius: '999px', border: `0.1em solid ${on ? (color || accent) : 'transparent'}`, color: 'inherit',
+        background: on ? `color-mix(in srgb, ${color || accent} 22%, transparent)` : ink(style, 0.06), opacity: only && !on ? 0.6 : 1, fontWeight: on ? 700 : 500 }}>
+        {color && <span style={{ width: '0.65em', height: '0.65em', borderRadius: '50%', background: color }} />}{label}
+      </button>
+    );
+  };
+  const legend = config.showLegend !== false && chips.length > 1 && (
+    <div style={{ display: 'flex', gap: '0.4em', flexWrap: 'wrap', fontSize: '0.66em', marginBottom: '0.5em' }}>
+      {chip(null, 'All')}{chips.map((c) => chip(c.key, c.label, c.color))}
     </div>
   );
 
