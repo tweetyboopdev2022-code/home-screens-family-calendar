@@ -1,4 +1,4 @@
-export type Ev = { id: string; title: string; start: string; end: string; allDay: boolean; sourceId?: string; calendarColor?: string; location?: string };
+export type Ev = { id: string; title: string; start: string; end: string; allDay: boolean; sourceId?: string; calendarColor?: string; location?: string; description?: string; sourceName?: string };
 
 /** "Day 3 · Phys. Ed, Library" → { day: 3 }; anything else → null. */
 export function schoolDay(title: string): number | null {

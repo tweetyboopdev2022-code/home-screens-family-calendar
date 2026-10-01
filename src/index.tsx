@@ -13,7 +13,16 @@ const evCache = new Map<string, { at: number; v: Ev[] }>();
 async function loadMeta(): Promise<Meta> {
   if (metaCache && Date.now() - metaCache.at < 600000) return metaCache.v;
   const c = await fetch('/api/config').then((r) => r.json());
-  const v = { people: (c.settings?.calendar?.people ?? []) as Person[] };
+  let people = (c.settings?.calendar?.people ?? []) as Person[];
+  // Newer Home Screens: people live in /api/family, their calendars in settings.calendar.personSources[id].
+  if (!people.length) {
+    try {
+      const f = await fetch('/api/family').then((r) => r.json());
+      const src = (c.settings?.calendar?.personSources ?? {}) as Record<string, string[]>;
+      people = (f.members ?? []).map((m: any) => ({ name: m.name, color: m.color, sourceIds: src[m.id] ?? [] }));
+    } catch { /* no people → everything shows, no filter buttons */ }
+  }
+  const v = { people };
   metaCache = { at: Date.now(), v }; return v;
 }
 async function loadEvents(from: string, to: string, fresh = false): Promise<Ev[]> {
@@ -67,6 +76,8 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
   };
   // Tap a name in the legend to see only that calendar; resets by itself after a few minutes.
   const [only, setOnly] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<Ev | null>(null);
+  React.useEffect(() => { if (!open) return; const t = setTimeout(() => setOpen(null), 45000); return () => clearTimeout(t); }, [open]);
   React.useEffect(() => { if (!only) return; const t = setTimeout(() => setOnly(null), 180000); return () => clearTimeout(t); }, [only]);
   const allowed = (e: Ev) => (!want.length || want.some((w) => matches(e, w))) && (!only || matches(e, only));
 
@@ -108,7 +119,7 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
     const col = colorOf(e); const icon = iconFor(e.title, e.sourceId);
     const time = e.allDay ? '' : fmtTime(new Date(e.start), tz, tf).replace(':00', '').replace(/\s?([AP])M/i, (_, x) => x.toLowerCase());
     return (
-      <div key={e.id + e.start} style={{ display: 'flex', gap: '0.3em', alignItems: 'flex-start', padding: '0.28em 0.4em', borderRadius: '0.4em', fontSize: size, lineHeight: 1.2,
+      <div key={e.id + e.start} onClick={(ev) => { ev.stopPropagation(); setOpen(e); }} style={{ cursor: 'pointer', display: 'flex', gap: '0.3em', alignItems: 'flex-start', padding: '0.28em 0.4em', borderRadius: '0.4em', fontSize: size, lineHeight: 1.2,
         background: e.allDay ? `color-mix(in srgb, ${col} 20%, transparent)` : 'transparent', borderLeft: `0.22em solid ${col}` }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: lines, WebkitBoxOrient: 'vertical', wordBreak: 'normal', overflowWrap: 'anywhere' } as React.CSSProperties}>
           {icon && <span style={{ marginRight: '0.25em' }}>{icon}</span>}{time && <b style={{ fontWeight: 700, opacity: 0.8 }}>{time} </b>}{tidyTitle(e.title)}
@@ -130,7 +141,7 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
   };
 
   return (
-    <div style={frame(style, { gap: 0 })}>
+    <div style={frame(style, { gap: 0, position: 'relative' })}>
       {legend}
       {err && !events ? <div style={{ margin: 'auto', opacity: 0.5, fontSize: '0.8em' }}>Calendar unavailable right now</div>
         : view === 'month' ? (
@@ -154,6 +165,26 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
             ))}
           </div>
         )}
+      {open && (() => {
+        const e = open; const col = colorOf(e); const who = personOf(e.sourceId)?.name;
+        const d0 = new Date(e.allDay ? e.start.slice(0, 10) + 'T12:00:00Z' : e.start);
+        const dateTxt = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: e.allDay ? 'UTC' : tz }).format(d0);
+        const timeTxt = e.allDay ? 'All day' : `${fmtTime(new Date(e.start), tz, tf)} – ${fmtTime(new Date(e.end), tz, tf)}`;
+        return (
+          <div onClick={() => setOpen(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, borderRadius: 'inherit' }}>
+            <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(92%, 30em)', maxHeight: '88%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${col}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6em' }}>
+                <div style={{ flex: 1, fontSize: '1.15em', fontWeight: 700, lineHeight: 1.25 }}>{iconFor(e.title, e.sourceId)} {e.title}</div>
+                <button onClick={() => setOpen(null)} aria-label="Close" style={{ appearance: 'none', border: 'none', font: 'inherit', color: 'inherit', cursor: 'pointer', background: ink(style, 0.08), borderRadius: '999px', width: '1.8em', height: '1.8em', flexShrink: 0 }}>✕</button>
+              </div>
+              <div style={{ marginTop: '0.5em', fontSize: '0.85em', opacity: 0.8 }}>{dateTxt} · {timeTxt}</div>
+              {(who || e.sourceName) && <div style={{ marginTop: '0.25em', fontSize: '0.75em', display: 'flex', alignItems: 'center', gap: '0.4em', opacity: 0.7 }}><span style={{ width: '0.6em', height: '0.6em', borderRadius: '50%', background: col }} />{who || e.sourceName}</div>}
+              {e.location && <div style={{ marginTop: '0.6em', fontSize: '0.85em' }}>📍 {e.location}</div>}
+              {e.description && <div style={{ marginTop: '0.7em', fontSize: '0.8em', whiteSpace: 'pre-wrap', lineHeight: 1.4, opacity: 0.85 }}>{e.description.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')}</div>}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

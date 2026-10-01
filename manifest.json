@@ -1,8 +1,8 @@
 {
   "id": "family-calendar",
   "name": "Family Calendar",
-  "version": "1.1.0",
-  "description": "Day columns or a month grid where event titles wrap instead of being cut off. School 'Day N' events become a small badge; hot lunches, no-school days, tests and birthdays get icons; colours follow each person.",
+  "version": "1.2.0",
+  "description": "Day columns or a month grid where event titles wrap instead of being cut off. School 'Day N' events become a small badge; hot lunches, no-school days, tests and birthdays get icons; colours follow each person. Tap an event for its details.",
   "author": "Tanya",
   "license": "MIT",
   "minAppVersion": "1.7.1",
