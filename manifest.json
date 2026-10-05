@@ -1,8 +1,8 @@
 {
   "id": "family-calendar",
   "name": "Family Calendar",
-  "version": "1.2.0",
-  "description": "Day columns or a month grid where event titles wrap instead of being cut off. School 'Day N' events become a small badge; hot lunches, no-school days, tests and birthdays get icons; colours follow each person. Tap an event for its details.",
+  "version": "1.3.0",
+  "description": "Day columns or a month grid where event titles wrap. Weather on each date; tap a date to see the whole day with the weather where each event happens. 'Day N' school badges, icons, per-person colours and filter buttons.",
   "author": "Tanya",
   "license": "MIT",
   "minAppVersion": "1.7.1",
@@ -17,7 +17,8 @@
     "calendars": "",
     "schoolDayBadge": true,
     "showLegend": true,
-    "accentColor": "#f5c37e"
+    "accentColor": "#f5c37e",
+    "showWeather": true
   },
   "defaultSize": {
     "w": 1000,
@@ -97,13 +98,28 @@
         "title": "Today colour",
         "ui:widget": "color",
         "ui:group": "Look"
+      },
+      "showWeather": {
+        "type": "boolean",
+        "title": "Show weather on dates",
+        "ui:widget": "toggle",
+        "ui:group": "Look"
       }
     }
   },
   "exports": {
     "component": "default"
   },
-  "dataRequirements": [],
+  "dataRequirements": [
+    "location"
+  ],
   "prefetchUrl": null,
-  "permissions": []
+  "permissions": [
+    "storage",
+    "network"
+  ],
+  "allowedDomains": [
+    "api.open-meteo.com",
+    "nominatim.openstreetmap.org"
+  ]
 }

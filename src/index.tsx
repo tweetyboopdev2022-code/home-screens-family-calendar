@@ -4,6 +4,7 @@ import React from 'react';
 import type { PluginComponentProps } from './hs-plugin';
 import { frame, ink, useNow, dayKey, fmtTime, useBox } from './ui';
 import { Ev, schoolDay, iconFor, tidyTitle, isOff, dayKeysOf, addDaysKey, dowOf } from './logic';
+import { homeDaily, pointAt, geocode, wmo, DayWx, PointWx } from './weather';
 
 type Person = { name: string; color?: string; sourceIds?: string[] };
 type Meta = { people: Person[] };
@@ -38,6 +39,10 @@ const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function FamilyCalendar({ config, style, timezone: tz, ...rest }: PluginComponentProps & { timeFormat?: string }) {
   const tf = (rest as any).timeFormat;
+  const hs = (window as any).__HS_SDK__?.getHostSettings?.() ?? {};
+  const lat = Number((rest as any).latitude ?? hs.latitude); const lon = Number((rest as any).longitude ?? hs.longitude);
+  const zone = tz || hs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const showWx = config.showWeather !== false && Number.isFinite(lat) && Number.isFinite(lon);
   const now = useNow(60000);
   const today = dayKey(now, tz);
   const view = String(config.view ?? 'columns');
@@ -64,6 +69,14 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
       if (!dead) { setMeta(m); setEvents(ev); setErr(false); }
     } catch { if (!dead) setErr(true); }
   })(); return () => { dead = true; }; }, [start, end, tick]);
+
+  const [wx, setWx] = React.useState<Map<string, DayWx> | null>(null);
+  const wxTick = Math.floor(now.getTime() / 1800000);
+  React.useEffect(() => { if (!showWx) return; let dead = false;
+    homeDaily(lat, lon, zone).then((m) => { if (!dead) setWx(m); }).catch(() => {});
+    return () => { dead = true; }; }, [showWx, lat, lon, zone, wxTick]);
+  const [dayOpen, setDayOpen] = React.useState<string | null>(null);
+  React.useEffect(() => { if (!dayOpen) return; const t = setTimeout(() => setDayOpen(null), 90000); return () => clearTimeout(t); }, [dayOpen]);
 
   // Person/colour per source
   const people = meta?.people ?? [];
@@ -93,6 +106,10 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
       byDay.get(k)!.push(e);
     }
   }
+  const badgeAll = new Map<string, number>();
+  for (const e of (events ?? []).filter(allowed)) { const sd = schoolDay(e.title); if (sd != null) for (const k of dayKeysOf(e, (d) => dayKey(d, tz))) badgeAll.set(k, sd); }
+  const allDayEvents = (k: string) => (events ?? []).filter(allowed).filter((e) => !(schoolDay(e.title) != null && hideDayEvents) && dayKeysOf(e, (d) => dayKey(d, tz)).includes(k))
+    .sort((a, b) => (a.allDay === b.allDay ? +new Date(a.start) - +new Date(b.start) : a.allDay ? -1 : 1));
   for (const [, l] of byDay) l.sort((a, b) => (a.allDay === b.allDay ? +new Date(a.start) - +new Date(b.start) : a.allDay ? -1 : 1));
 
   const chips = [
@@ -129,13 +146,16 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
   };
 
   const header = (k: string, big: boolean) => {
-    const isToday = k === today; const d = new Date(k + 'T12:00:00Z'); const b = badge.get(k);
+    const isToday = k === today; const d = new Date(k + 'T12:00:00Z'); const b = badge.get(k); const w = showWx ? wx?.get(k) : undefined;
     return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', rowGap: '0.2em', alignItems: 'baseline', gap: '0.35em', padding: big ? '0.35em 0.45em' : '0.2em 0.3em', borderRadius: '0.45em',
+      <div onClick={(ev) => { ev.stopPropagation(); setDayOpen(k); }} style={{ cursor: 'pointer', display: 'flex', flexWrap: 'wrap', rowGap: '0.2em', alignItems: 'baseline', gap: '0.35em', padding: big ? '0.35em 0.45em' : '0.2em 0.3em', borderRadius: '0.45em',
         background: isToday ? `color-mix(in srgb, ${accent} 26%, transparent)` : off.has(k) ? ink(style, 0.1) : 'transparent', marginBottom: '0.25em' }}>
         {big && <span style={{ fontSize: '0.72em', fontWeight: 600, opacity: isToday ? 1 : 0.6, textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '0.15em' }}>{isToday ? 'Today' : WD[d.getUTCDay()]}</span>}
         <span style={{ fontSize: big ? '0.9em' : '0.72em', fontWeight: 700, color: isToday ? accent : undefined }}>{d.getUTCDate() === 1 && !big ? new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: 'UTC' }).format(d) + ' ' : ''}{d.getUTCDate()}</span>
-        {b != null && <span style={{ marginLeft: 'auto', fontSize: big ? '0.6em' : '0.55em', fontWeight: 700, padding: '0.1em 0.45em', borderRadius: '999px', background: ink(style, 0.12), whiteSpace: 'nowrap' }}>Day {b}</span>}
+        {b != null && <span style={{ fontSize: big ? '0.6em' : '0.55em', fontWeight: 700, padding: '0.1em 0.45em', borderRadius: '999px', background: ink(style, 0.12), whiteSpace: 'nowrap' }}>Day {b}</span>}
+        {w && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.15em', fontSize: big ? '0.66em' : '0.55em', fontWeight: 600, whiteSpace: 'nowrap', opacity: 0.9 }}>
+          <span style={{ fontSize: '1.25em', lineHeight: 1 }}>{wmo(w.code).icon}</span>{Math.round(w.hi)}°{big && <span style={{ opacity: 0.5, fontWeight: 500 }}>/{Math.round(w.lo)}°</span>}
+        </span>}
       </div>
     );
   };
@@ -165,13 +185,17 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
             ))}
           </div>
         )}
+      {dayOpen && (
+        <DaySheet k={dayOpen} today={today} events={allDayEvents(dayOpen)} badge={badgeAll.get(dayOpen)} wx={wx?.get(dayOpen)} style={style} accent={accent} tz={zone} tf={tf}
+          colorOf={colorOf} onEvent={(e) => setOpen(e)} onClose={() => setDayOpen(null)} home={showWx ? { lat, lon } : null} />
+      )}
       {open && (() => {
         const e = open; const col = colorOf(e); const who = personOf(e.sourceId)?.name;
         const d0 = new Date(e.allDay ? e.start.slice(0, 10) + 'T12:00:00Z' : e.start);
         const dateTxt = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: e.allDay ? 'UTC' : tz }).format(d0);
         const timeTxt = e.allDay ? 'All day' : `${fmtTime(new Date(e.start), tz, tf)} – ${fmtTime(new Date(e.end), tz, tf)}`;
         return (
-          <div onClick={() => setOpen(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, borderRadius: 'inherit' }}>
+          <div onClick={() => setOpen(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7, borderRadius: 'inherit' }}>
             <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(92%, 30em)', maxHeight: '88%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${col}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)' }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6em' }}>
                 <div style={{ flex: 1, fontSize: '1.15em', fontWeight: 700, lineHeight: 1.25 }}>{iconFor(e.title, e.sourceId)} {e.title}</div>
@@ -209,6 +233,75 @@ function Cell({ children, past, style, column }: { children: React.ReactNode; pa
       borderRadius: '0.6em', background: ink(style, column ? 0.035 : 0.03), opacity: past ? 0.45 : 1 }} data-size={size.h}>
       {children}
       {hidden > 0 && <div data-more="1" style={{ position: 'absolute', bottom: '0.15em', right: '0.4em', fontSize: '0.55em', fontWeight: 600, opacity: 0.6 }}>+{hidden} more</div>}
+    </div>
+  );
+}
+
+/** Full view of one day: weather, every event, and the weather where each event happens. */
+function DaySheet({ k, today, events, badge, wx, style, accent, tz, tf, colorOf, onEvent, onClose, home }: {
+  k: string; today: string; events: Ev[]; badge?: number; wx?: DayWx; style: any; accent: string; tz: string; tf?: string;
+  colorOf: (e: Ev) => string; onEvent: (e: Ev) => void; onClose: () => void; home: { lat: number; lon: number } | null;
+}) {
+  const [spot, setSpot] = React.useState<Record<string, { wx: PointWx | null; town: string }>>({});
+  React.useEffect(() => {
+    if (!home) return; let dead = false;
+    (async () => {
+      for (const e of events) {
+        const when = new Date(e.allDay ? e.start.slice(0, 10) + 'T12:00:00' : e.start);
+        if (when.getTime() < Date.now() - 3 * 3600000 || when.getTime() > Date.now() + 15.5 * 86400000) continue;
+        let place: { lat: number; lon: number } = home; let town = '';
+        if (e.location) { const g = await geocode(e.location).catch(() => null); if (g) { place = g; town = g.town; } }
+        if (!e.location && e.allDay) continue;   // all-day at home: the day's weather above covers it
+        const p = await pointAt(place.lat, place.lon, tz, when).catch(() => null);
+        if (!dead) setSpot((m) => ({ ...m, [e.id + e.start]: { wx: p, town } }));
+      }
+    })();
+    return () => { dead = true; };
+  }, [k, events.map((e) => e.id).join('|'), home?.lat, home?.lon]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const d = new Date(k + 'T12:00:00Z');
+  const title = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(d);
+  const rel = k === today ? 'Today' : k === addDaysKey(today, 1) ? 'Tomorrow' : '';
+  const w = wx ? wmo(wx.code) : null;
+  const tfmt = (e: Ev) => e.allDay ? 'All day' : fmtTime(new Date(e.start), tz, tf);
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 6, borderRadius: 'inherit' }}>
+      <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(94%, 34em)', maxHeight: '92%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${accent}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)', scrollbarWidth: 'none' } as React.CSSProperties}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6em' }}>
+          <div style={{ flex: 1 }}>
+            {rel && <div style={{ fontSize: '0.65em', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: accent }}>{rel}</div>}
+            <div style={{ fontSize: '1.2em', fontWeight: 700 }}>{title}{badge != null && <span style={{ marginLeft: '0.5em', fontSize: '0.55em', verticalAlign: 'middle', padding: '0.15em 0.55em', borderRadius: '999px', background: ink(style, 0.12) }}>Day {badge}</span>}</div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ appearance: 'none', border: 'none', font: 'inherit', color: 'inherit', cursor: 'pointer', background: ink(style, 0.08), borderRadius: '999px', width: '1.8em', height: '1.8em', flexShrink: 0 }}>✕</button>
+        </div>
+        {w && wx && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6em', marginTop: '0.6em', padding: '0.5em 0.7em', borderRadius: '0.7em', background: ink(style, 0.06) }}>
+            <span style={{ fontSize: '1.8em', lineHeight: 1 }}>{w.icon}</span>
+            <div style={{ lineHeight: 1.2 }}><div style={{ fontWeight: 700 }}>{Math.round(wx.hi)}° / {Math.round(wx.lo)}°</div><div style={{ fontSize: '0.75em', opacity: 0.7 }}>{w.label} at home{wx.pop >= 20 ? ` · 💧 ${Math.round(wx.pop)}%` : ''}</div></div>
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45em', marginTop: '0.8em' }}>
+          {!events.length && <div style={{ opacity: 0.5, fontSize: '0.85em', padding: '0.5em 0' }}>Nothing on the calendar.</div>}
+          {events.map((e) => {
+            const col = colorOf(e); const sp = spot[e.id + e.start]; const pw = sp?.wx ? wmo(sp.wx.code) : null;
+            return (
+              <div key={e.id + e.start} onClick={() => onEvent(e)} style={{ cursor: 'pointer', display: 'flex', gap: '0.6em', alignItems: 'center', padding: '0.5em 0.6em', borderRadius: '0.6em', background: ink(style, 0.05), borderLeft: `0.25em solid ${col}` }}>
+                <div style={{ width: '4.2em', flexShrink: 0, fontSize: '0.8em', fontWeight: 700, opacity: 0.8 }}>{tfmt(e)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, lineHeight: 1.25 }}>{iconFor(e.title, e.sourceId)} {tidyTitle(e.title)}</div>
+                  {e.location && <div style={{ fontSize: '0.72em', opacity: 0.65, marginTop: '0.1em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📍 {e.location}</div>}
+                </div>
+                {pw && sp?.wx && (
+                  <div style={{ flexShrink: 0, textAlign: 'right', lineHeight: 1.15 }}>
+                    <div style={{ fontWeight: 700 }}><span style={{ marginRight: '0.2em' }}>{pw.icon}</span>{Math.round(sp.wx.temp)}°</div>
+                    <div style={{ fontSize: '0.62em', opacity: 0.6 }}>{sp.town || (e.location ? '' : 'home')}{sp.wx.pop >= 30 ? ` · 💧${Math.round(sp.wx.pop)}%` : ''}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
