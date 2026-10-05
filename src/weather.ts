@@ -55,21 +55,46 @@ export async function pointAt(lat: number, lon: number, tz: string, when: Date):
   return { code: h.v.weather_code[best], temp: h.v.temperature_2m[best], pop: h.v.precipitation_probability?.[best] ?? 0 };
 }
 
-const GEO_KEY = 'family-calendar:geo';
-function geoStore(): Record<string, Geo | null> { try { return JSON.parse(localStorage.getItem(GEO_KEY) || '{}'); } catch { return {}; } }
-/** Address → coordinates (cached forever on this display). Tries the full text, then just the town part. */
-export async function geocode(q: string): Promise<Geo | null> {
-  const k = q.trim().toLowerCase(); const store = geoStore();
-  if (k in store) return store[k];
-  const tries = [q, q.split(',').slice(-2).join(',').trim(), q.split(',').slice(-1)[0].trim()].filter((x, i, a) => x && a.indexOf(x) === i);
-  let found: Geo | null = null;
-  for (const t of tries) {
-    try {
-      const j = await getJson(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&countrycodes=ca&q=${encodeURIComponent(t)}`, 86400000);
-      const r = j?.[0];
-      if (r) { const a = r.address ?? {}; found = { lat: Number(r.lat), lon: Number(r.lon), town: a.city || a.town || a.village || a.municipality || a.county || '' }; break; }
-    } catch { /* try the next form */ }
-  }
-  store[k] = found; try { localStorage.setItem(GEO_KEY, JSON.stringify(store)); } catch { /* ignore */ }
-  return found;
+const GEO_KEY = 'family-calendar:geo2';
+type GeoEntry = { g: Geo | null; at: number };
+function geoStore(): Record<string, GeoEntry> { try { return JSON.parse(localStorage.getItem(GEO_KEY) || '{}'); } catch { return {}; } }
+const inflight = new Map<string, Promise<Geo | null>>();
+let lastNominatim = 0;
+const UA = { 'User-Agent': 'WallHub-family-calendar/1.4 (home wall display)' };
+
+async function nominatim(q: string): Promise<Geo | null> {
+  // Nominatim asks for at most one request per second.
+  const wait = lastNominatim + 1100 - Date.now(); if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastNominatim = Date.now();
+  const r: Response = await sdk().pluginFetch(PID, { url: `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&countrycodes=ca&q=${encodeURIComponent(q)}`, cacheTtlMs: 86400000, headers: UA });
+  if (!r.ok) throw new Error(String(r.status));
+  const j = await r.json(); const x = j?.[0]; if (!x) return null;
+  const a = x.address ?? {};
+  return { lat: Number(x.lat), lon: Number(x.lon), town: a.city || a.town || a.village || a.municipality || a.county || '' };
+}
+async function openMeteoPlace(name: string): Promise<Geo | null> {
+  const j = await getJson(`https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&countryCode=CA&name=${encodeURIComponent(name)}`, 86400000);
+  const x = j?.results?.[0]; return x ? { lat: x.latitude, lon: x.longitude, town: x.name } : null;
+}
+
+/** Address → coordinates. Cached on this display (misses retried after a day). */
+export function geocode(q: string): Promise<Geo | null> {
+  const k = q.trim().toLowerCase();
+  const hit = geoStore()[k];
+  if (hit && (hit.g || Date.now() - hit.at < 86400000)) return Promise.resolve(hit.g);
+  if (inflight.has(k)) return inflight.get(k)!;
+  const job = (async () => {
+    const parts = q.split(',').map((x) => x.trim()).filter(Boolean);
+    let found: Geo | null = null;
+    try { found = await nominatim(q); } catch { /* fall through */ }
+    // Town-level is plenty for weather: try the place names in the address.
+    for (const t of [parts[parts.length - 1], parts[parts.length - 2], parts[1]].filter((x) => x && !/^\d|canada|qc|quebec|québec/i.test(x))) {
+      if (found) break;
+      try { found = await openMeteoPlace(t!.replace(/\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/i, '').trim()); } catch { /* next */ }
+    }
+    const store = geoStore(); store[k] = { g: found, at: Date.now() };
+    try { localStorage.setItem(GEO_KEY, JSON.stringify(store)); } catch { /* ignore */ }
+    inflight.delete(k); return found;
+  })();
+  inflight.set(k, job); return job;
 }

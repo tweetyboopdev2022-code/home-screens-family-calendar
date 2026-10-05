@@ -76,6 +76,12 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
     homeDaily(lat, lon, zone).then((m) => { if (!dead) setWx(m); }).catch(() => {});
     return () => { dead = true; }; }, [showWx, lat, lon, zone, wxTick]);
   const [dayOpen, setDayOpen] = React.useState<string | null>(null);
+  // Warm the location weather in the background so a tapped day shows it straight away.
+  React.useEffect(() => {
+    if (!showWx || !events) return;
+    const soon = events.filter((e) => e.location && Date.parse(e.start) < Date.now() + 15 * 86400000 && Date.parse(e.end || e.start) > Date.now() - 3600000);
+    (async () => { for (const e of soon) { const g = await geocode(e.location!).catch(() => null); if (g) pointAt(g.lat, g.lon, zone, new Date(e.start)).catch(() => {}); } })();
+  }, [showWx, events, zone]);
   React.useEffect(() => { if (!dayOpen) return; const t = setTimeout(() => setDayOpen(null), 90000); return () => clearTimeout(t); }, [dayOpen]);
 
   // Person/colour per source
@@ -195,8 +201,8 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
         const dateTxt = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: e.allDay ? 'UTC' : tz }).format(d0);
         const timeTxt = e.allDay ? 'All day' : `${fmtTime(new Date(e.start), tz, tf)} – ${fmtTime(new Date(e.end), tz, tf)}`;
         return (
-          <div onClick={() => setOpen(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7, borderRadius: 'inherit' }}>
-            <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(92%, 30em)', maxHeight: '88%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${col}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)' }}>
+          <Overlay onClose={() => setOpen(null)} z={7} style={style}>
+            <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(92%, 32em)', maxHeight: '88%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${col}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)' }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6em' }}>
                 <div style={{ flex: 1, fontSize: '1.15em', fontWeight: 700, lineHeight: 1.25 }}>{iconFor(e.title, e.sourceId)} {e.title}</div>
                 <button onClick={() => setOpen(null)} aria-label="Close" style={{ appearance: 'none', border: 'none', font: 'inherit', color: 'inherit', cursor: 'pointer', background: ink(style, 0.08), borderRadius: '999px', width: '1.8em', height: '1.8em', flexShrink: 0 }}>✕</button>
@@ -206,7 +212,7 @@ export default function FamilyCalendar({ config, style, timezone: tz, ...rest }:
               {e.location && <div style={{ marginTop: '0.6em', fontSize: '0.85em' }}>📍 {e.location}</div>}
               {e.description && <div style={{ marginTop: '0.7em', fontSize: '0.8em', whiteSpace: 'pre-wrap', lineHeight: 1.4, opacity: 0.85 }}>{e.description.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')}</div>}
             </div>
-          </div>
+          </Overlay>
         );
       })()}
     </div>
@@ -245,17 +251,15 @@ function DaySheet({ k, today, events, badge, wx, style, accent, tz, tf, colorOf,
   const [spot, setSpot] = React.useState<Record<string, { wx: PointWx | null; town: string }>>({});
   React.useEffect(() => {
     if (!home) return; let dead = false;
-    (async () => {
-      for (const e of events) {
-        const when = new Date(e.allDay ? e.start.slice(0, 10) + 'T12:00:00' : e.start);
-        if (when.getTime() < Date.now() - 3 * 3600000 || when.getTime() > Date.now() + 15.5 * 86400000) continue;
-        let place: { lat: number; lon: number } = home; let town = '';
-        if (e.location) { const g = await geocode(e.location).catch(() => null); if (g) { place = g; town = g.town; } }
-        if (!e.location && e.allDay) continue;   // all-day at home: the day's weather above covers it
-        const p = await pointAt(place.lat, place.lon, tz, when).catch(() => null);
-        if (!dead) setSpot((m) => ({ ...m, [e.id + e.start]: { wx: p, town } }));
-      }
-    })();
+    events.forEach(async (e) => {
+      const when = new Date(e.allDay ? e.start.slice(0, 10) + 'T12:00:00' : e.start);
+      if (when.getTime() < Date.now() - 3 * 3600000 || when.getTime() > Date.now() + 15.5 * 86400000) return;
+      if (!e.location && e.allDay) return;   // all-day at home: the day's weather above covers it
+      let place: { lat: number; lon: number } = home; let town = '';
+      if (e.location) { const g = await geocode(e.location).catch(() => null); if (g) { place = g; town = g.town; } else town = 'near home'; }
+      const p = await pointAt(place.lat, place.lon, tz, when).catch(() => null);
+      if (!dead) setSpot((m) => ({ ...m, [e.id + e.start]: { wx: p, town } }));
+    });
     return () => { dead = true; };
   }, [k, events.map((e) => e.id).join('|'), home?.lat, home?.lon]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -265,8 +269,8 @@ function DaySheet({ k, today, events, badge, wx, style, accent, tz, tf, colorOf,
   const w = wx ? wmo(wx.code) : null;
   const tfmt = (e: Ev) => e.allDay ? 'All day' : fmtTime(new Date(e.start), tz, tf);
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 6, borderRadius: 'inherit' }}>
-      <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(94%, 34em)', maxHeight: '92%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${accent}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)', scrollbarWidth: 'none' } as React.CSSProperties}>
+    <Overlay onClose={onClose} z={6} style={style}>
+      <div onClick={(ev) => ev.stopPropagation()} style={{ width: 'min(92%, 36em)', maxHeight: '90%', overflow: 'auto', background: style.backgroundColor || '#1c1b1a', color: style.textColor, borderRadius: '1em', padding: '1em 1.2em', borderTop: `0.35em solid ${accent}`, boxShadow: '0 1em 3em rgba(0,0,0,0.5)', scrollbarWidth: 'none' } as React.CSSProperties}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6em' }}>
           <div style={{ flex: 1 }}>
             {rel && <div style={{ fontSize: '0.65em', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: accent }}>{rel}</div>}
@@ -302,6 +306,32 @@ function DaySheet({ k, today, events, badge, wx, style, accent, tz, tf, colorOf,
           })}
         </div>
       </div>
+    </Overlay>
+  );
+}
+
+/** Pop-up layer. On the wall it covers the WHOLE screen (portal into the display canvas, bigger text);
+ *  anywhere else (editor preview) it covers just this block. */
+function Overlay({ children, onClose, z, style }: { children: React.ReactNode; onClose: () => void; z: number; style: any }) {
+  const anchor = React.useRef<HTMLSpanElement>(null);
+  const [host, setHost] = React.useState<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    // The screen root (1080×1920, carries the wall's scaling/rotation) is the parent of our module box.
+    if (/\/editor/.test(location.pathname)) return;
+    const screen = (anchor.current?.closest('[data-module-type]') as HTMLElement | null)?.parentElement ?? null;
+    if (screen && screen.offsetHeight > 600 && (window as any).ReactDOM?.createPortal) setHost(screen);
+  }, []);
+  const fs = Math.max(24, (Number(style?.fontSize) || 18) * 1.45);
+  const layer = (full: boolean) => (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: full ? 10000 : z,
+      borderRadius: full ? 0 : 'inherit', ...(full ? { fontSize: fs, fontFamily: style?.fontFamily, color: style?.textColor } : {}) }}>
+      {children}
     </div>
+  );
+  return (
+    <>
+      <span ref={anchor} style={{ display: 'none' }} />
+      {host ? (window as any).ReactDOM.createPortal(layer(true), host) : layer(false)}
+    </>
   );
 }
