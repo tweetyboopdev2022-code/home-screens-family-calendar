@@ -55,7 +55,7 @@ export async function pointAt(lat: number, lon: number, tz: string, when: Date):
   return { code: h.v.weather_code[best], temp: h.v.temperature_2m[best], pop: h.v.precipitation_probability?.[best] ?? 0 };
 }
 
-const GEO_KEY = 'family-calendar:geo2';
+const GEO_KEY = 'family-calendar:geo3';
 type GeoEntry = { g: Geo | null; at: number };
 function geoStore(): Record<string, GeoEntry> { try { return JSON.parse(localStorage.getItem(GEO_KEY) || '{}'); } catch { return {}; } }
 const inflight = new Map<string, Promise<Geo | null>>();
@@ -87,10 +87,13 @@ export function geocode(q: string): Promise<Geo | null> {
     const parts = q.split(',').map((x) => x.trim()).filter(Boolean);
     let found: Geo | null = null;
     try { found = await nominatim(q); } catch { /* fall through */ }
-    // Town-level is plenty for weather: try the place names in the address.
-    for (const t of [parts[parts.length - 1], parts[parts.length - 2], parts[1]].filter((x) => x && !/^\d|canada|qc|quebec|québec/i.test(x))) {
+    // "Tacos Victor, 4280 R. Notre Dame O, Montréal, …" → retry without the business name.
+    if (!found && parts.length > 2 && !/\d/.test(parts[0])) { try { found = await nominatim(parts.slice(1).join(', ')); } catch { /* next */ } }
+    // Town-level is plenty for weather: try each place name in the address, last first.
+    const towns = parts.slice().reverse().filter((x) => !/\d|^canada$|^(qc|quebec|québec|on|ontario)\b/i.test(x));
+    for (const t of towns) {
       if (found) break;
-      try { found = await openMeteoPlace(t!.replace(/\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/i, '').trim()); } catch { /* next */ }
+      try { found = await openMeteoPlace(t); } catch { /* next */ }
     }
     const store = geoStore(); store[k] = { g: found, at: Date.now() };
     try { localStorage.setItem(GEO_KEY, JSON.stringify(store)); } catch { /* ignore */ }
